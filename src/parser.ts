@@ -43,34 +43,6 @@ export type ParserOptions = {
 
 // eslint-disable-next-line @typescript-eslint/ban-types
 export class Parser<Output extends {}> {
-
-  /**
-   * Reads input data and returns a Parser instance.
-   * 
-   * @param input Input data to be parsed.
-   * @param options Options for reading.
-   * @returns A new Parser instance.
-   */
-  public static read<T extends Record<string, any>>(input: string, options?: ReaderOptions): Parser<T>
-
-  /**
-   * Reads input data and returns a Parser instance.
-   * 
-   * @param input Input data to be parsed.
-   * @param options Options for reading.
-   * @returns A new Parser instance.
-   */
-  public static read<T extends Record<string, any>>(input: Buffer, options?: ReaderOptions): Parser<T>
-
-  /**
-   * Reads input data and returns a Parser instance.
-   * 
-   * @param input Input data to be parsed.
-   * @param options Options for reading.
-   * @returns A new Parser instance.
-   */
-  public static read<T extends Record<string, any>>(input: Uint8Array, options?: ReaderOptions): Parser<T>
-
   /**
    * Reads input data and returns a Parser instance.
    * 
@@ -187,19 +159,41 @@ export class Parser<Output extends {}> {
     const eachRow = (n: number, pos: number = 0) => {
       if(pos <= n) {
         const row = this.#lines[pos];
-        const sectionRegex = /^\[(\w+)\]$/;
+        const sectionRegex = /^\[(.*)\]$/;
 
         if(sectionRegex.test(row)) {
           const section = sectionRegex.exec(row)![1].trim();
-          results[section] = {};
 
-          useSection = section;
+          if(this.#eval(section).type === 'number') {
+            throw new SyntaxError(`Invalid syntax at line ${pos + 1}. Section name cannot be a number.`);
+          }
+          
+          if(/\s+/.test(section)) {
+            switch(options?.keysWithSpaces) {
+              case 'allow':
+                results[section] = {};
+                useSection = section;
+                break;
+              case 'ignore':
+                break;
+              case 'error':
+              default:
+                throw new SyntaxError(`Invalid syntax at line ${pos + 1}. Section name cannot contain spaces.`);
+            }
+          } else {
+            results[section] = {};
+            useSection = section;
+          }
         } else {
           if(row.indexOf('=') < 0) {
             throw new SyntaxError(`Invalid syntax at line ${pos + 1}. Expected a key-value pair.`);
           }
 
           const [key, value] = row.split('=').map(item => item.trim());
+
+          if(this.#eval(key).type === 'number') {
+            throw new SyntaxError(`Invalid syntax at line ${pos + 1}. Key cannot be a number.`);
+          }
 
           const processLine = () => {
             if(!useSection) {

@@ -1,4 +1,6 @@
-export function applyAliases(object: Record<string, any>, aliases: Record<string, string>): Record<string, any> {
+export function applyAliases<K extends string | number | symbol = string, AliasKey extends string | number | symbol = string>(
+  object: Record<K, any>,
+  aliases: Record<K, AliasKey>): Record<AliasKey, any> {
   for(const prop in object) {
     if(typeof object[prop] === 'object') {
       object[prop] = applyAliases(object[prop], aliases);
@@ -6,9 +8,9 @@ export function applyAliases(object: Record<string, any>, aliases: Record<string
 
     if(!(prop in aliases)) continue;
 
-    object[aliases[prop]] = object[prop];
+    (object as Record<any, any>)[aliases[prop]] = object[prop];
     delete object[prop];
   }
 
-  return object;
+  return object as any;
 }
