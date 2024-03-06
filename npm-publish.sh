@@ -41,6 +41,9 @@ cd ..
 rm -rf ./dist/
 rm -rf ./package.json
 
+rm -rf ./.editorconfig
+rm -rf ./npm-publish.sh
+
 # VERSION=$(cat ./package.build.json | python3 -c "import sys, json; print(json.load(sys.stdin)['version'])")
 
 mv ./package.build.json ./package.json

@@ -1,4 +1,5 @@
-import { applyAliases } from './_utils';
+import { applyAliases } from './_internals/utils';
+import type { Doc, Schema } from './_internals/types';
 
 
 interface ValuesMap {
@@ -26,6 +27,9 @@ export type ReaderOptions = {
 
   /** The character(s) that represents a comment. */
   commentWith?: string | string[];
+
+  /** A schema to be used for validation. If a key is not present in the schema, it will be ignored.*/
+  validationSchema?: Schema;
 }
 
 /**
@@ -40,9 +44,13 @@ export type ParserOptions = {
   aliases?: Record<string, string>;
 }
 
+type ParserConstructorOptions = Pick<ReaderOptions, 'validationSchema'>;
 
-// eslint-disable-next-line @typescript-eslint/ban-types
-export class Parser<Output extends {}> {
+
+/**
+ * Represents a parser for INI or similar files.
+ */
+export class Parser<Output extends Doc> {
   /**
    * Reads input data and returns a Parser instance.
    * 
@@ -50,7 +58,7 @@ export class Parser<Output extends {}> {
    * @param options Options for reading.
    * @returns A new Parser instance.
    */
-  public static read<T extends Record<string, any>>(input: string | Buffer | Uint8Array, options?: ReaderOptions): Parser<T> {
+  public static read<T extends Doc>(input: string | Buffer | Uint8Array, options?: ReaderOptions): Parser<T> {
     const file = (Buffer.isBuffer(input) ? input : Buffer.from(input)).toString('utf-8');
     const lineSeparator = file.indexOf('\r\n') > -1 ? '\r\n' : '\n';
 
@@ -100,20 +108,25 @@ export class Parser<Output extends {}> {
 
     eachLine(lines.length - 1);
     
-    return new Parser(clearLines.map(item => item.trim()),
-      lineSeparator,
-      new Uint8Array((Buffer.isBuffer(input) ? input : Buffer.from(input)).buffer));
+    return new Parser(clearLines.map(item => item.trim()), lineSeparator,
+      Buffer.isBuffer(input) ? input : Buffer.from(input), {
+        validationSchema: options?.validationSchema,
+      });
   }
 
   readonly #lines: string[];
   readonly #eolSequence: string;
   readonly #originalBuffer: Uint8Array;
+  #o: ParserConstructorOptions;
 
   private constructor(
     lines: string[],
     eolSequence: string,
-    originalBuffer: Uint8Array // eslint-disable-line comma-dangle
+    originalBuffer: Uint8Array,
+    options?: ParserConstructorOptions // eslint-disable-line comma-dangle
   ) {
+    this.#o = options ?? {};
+
     this.#lines = lines;
     this.#eolSequence = eolSequence;
     this.#originalBuffer = originalBuffer;
@@ -242,7 +255,107 @@ export class Parser<Output extends {}> {
       applyAliases(results, options.aliases);
     }
 
-    return this.#evalOutputObject(results) as Output;
+    const o = this.#evalOutputObject(results);
+    if(!this.#o.validationSchema) return o as Output;
+   
+    const validateSchema = (obj: Record<string, any>, schema: Schema) => {
+      for(const prop in schema) {
+        if(!Object.prototype.hasOwnProperty.call(schema, prop) &&
+          !Object.prototype.hasOwnProperty.call(o, prop)) continue;
+
+        if(typeof schema[prop] === 'object' && !Array.isArray(schema[prop])) {
+          if(typeof obj[prop] !== 'object') {
+            throw new TypeError(`The property "${prop}" must be an section.`);
+          }
+
+          validateSchema(obj[prop], schema[prop] as Schema);
+        } else if(Array.isArray(schema[prop])) {
+          if(!Object.prototype.hasOwnProperty.call(obj, prop) &&
+            schema[prop][1] === true) {
+            throw new TypeError(`The property "${prop}" is required.`);
+          }
+
+          if(Array.isArray(schema[prop][0])) {
+            if(typeof obj[prop] !== 'string') {
+              throw new TypeError(`The property "${prop}" must be a string.`);
+            }
+
+            if(!schema[prop][0].includes(obj[prop])) {
+              throw new TypeError(`The property "${prop}" must be one of the following: ${(schema[prop][0] as string[]).join(', ')}.`);
+            }
+          } else {
+            switch(schema[prop][0]) {
+              case 'email': {
+                if(typeof obj[prop] !== 'string') {
+                  throw new TypeError(`The property "${prop}" must be a valid email.`);
+                }
+      
+                const regex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+      
+                if(!regex.test(obj[prop])) {
+                  throw new TypeError(`The property "${prop}" must be a valid email.`);
+                }
+      
+                break;
+              }
+              case 'url':
+                try {
+                  if(typeof obj[prop] !== 'string') {
+                    throw {};
+                  }
+      
+                  new URL(obj[prop]);
+                  break;
+                } catch {
+                  throw new TypeError(`The property "${prop}" must be a valid URL.`);
+                }
+                break;
+              case 'hex':
+                if(typeof obj[prop] !== 'string' || !/^[a-f0-9]*$/.test(obj[prop])) {
+                  throw new TypeError(`The property "${prop}" must be a valid hexadecimal number.`);
+                }
+      
+                break;
+              case 'string':
+                if(typeof obj[prop] !== 'string') {
+                  throw new TypeError(`The property "${prop}" must be a string.`);
+                }
+          
+                break;
+              case 'number':
+                if(typeof obj[prop] !== 'number' || Number.isNaN(obj[prop])) {
+                  throw new TypeError(`The property "${prop}" must be a number.`);
+                }
+      
+                break;
+              case 'array':
+                if(!Array.isArray(obj[prop])) {
+                  throw new TypeError(`The property "${prop}" must be an array.`);
+                }
+                  
+                break;
+              case 'boolean': {
+                if(typeof obj[prop] !== 'boolean') {
+                  throw new TypeError(`The property "${prop}" must be a boolean.`);
+                }
+          
+                break;
+              }
+              case 'section-header': {
+                if(typeof obj[prop] !== 'object') {
+                  throw new TypeError(`The property "${prop}" must be the header name of a section.`);
+                }
+              
+                break;
+              }
+            }
+          }
+        }
+      }
+    };
+
+    validateSchema(o, this.#o.validationSchema);
+    return o as Output;
   }
 
   #evalOutputObject(obj: Record<string, any>): Record<string, any> {
@@ -298,6 +411,19 @@ export class Parser<Output extends {}> {
       type: 'string',
       value: input,
     };
+  }
+
+  public *[Symbol.iterator](): Generator<Doc> {
+    const obj = this.parse();
+
+    for(const prop in obj) {
+      if(!Object.prototype.hasOwnProperty.call(obj, prop)) continue;
+      yield { [prop]: obj[prop] };
+    }
+  }
+
+  public [Symbol.toStringTag]() {
+    return '[object Parser]';
   }
 }
 
